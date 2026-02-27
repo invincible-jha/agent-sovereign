@@ -16,6 +16,7 @@ Commands
 - ``provenance``   Record or inspect model provenance records.
 - ``compliance``   Run a full sovereignty compliance check.
 - ``edge-config``  Validate and estimate performance for an edge configuration.
+- ``bundle``       One-command sovereign bundle pipeline (Phase 7A).
 """
 from __future__ import annotations
 
@@ -964,6 +965,454 @@ def edge_config_command(
             console.print(f"  [dim]-[/dim] {note}")
 
     sys.exit(0 if validation.is_valid else 1)
+
+
+# ---------------------------------------------------------------------------
+# bundle command group (Phase 7A — sovereign one-command deployment bundler)
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="bundle")
+def bundle_group() -> None:
+    """One-command sovereign bundle pipeline.
+
+    Sub-commands for packaging, containerising, verifying, and attesting
+    self-contained agent bundles.
+
+    Examples:
+
+    \b
+        agent-sovereign bundle package --source ./my-agent --output ./dist \\
+            --sovereignty full
+        agent-sovereign bundle docker --manifest ./dist/manifest.json \\
+            --output ./dist
+        agent-sovereign bundle verify --manifest ./dist/manifest.json \\
+            --bundle-dir ./dist
+        agent-sovereign bundle attest --manifest ./dist/manifest.json \\
+            --output ./dist/attestations.json
+    """
+
+
+@bundle_group.command(name="package")
+@click.option(
+    "--source",
+    "-s",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    help="Source directory to scan and bundle.",
+)
+@click.option(
+    "--output",
+    "-o",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Output directory for the generated manifest.",
+)
+@click.option(
+    "--sovereignty",
+    type=click.Choice(["full", "partial", "minimal"], case_sensitive=False),
+    default="partial",
+    show_default=True,
+    help="Bundle sovereignty level.",
+)
+@click.option(
+    "--platform",
+    "target_platform",
+    default="docker",
+    show_default=True,
+    help="Target deployment platform (e.g. docker, kubernetes, lambda, edge).",
+)
+@click.option(
+    "--compress",
+    is_flag=True,
+    default=False,
+    help="Mark the bundle as intended for compression (does not compress itself).",
+)
+@click.option(
+    "--include-model",
+    is_flag=True,
+    default=False,
+    help="Include model weight files in the bundle.",
+)
+@click.option(
+    "--include-tests",
+    is_flag=True,
+    default=False,
+    help="Include test files in the bundle.",
+)
+@click.option(
+    "--json-output",
+    is_flag=True,
+    default=False,
+    help="Emit JSON summary instead of rich output.",
+)
+def bundle_package_command(
+    source: Path,
+    output: Path,
+    sovereignty: str,
+    target_platform: str,
+    compress: bool,
+    include_model: bool,
+    include_tests: bool,
+    json_output: bool,
+) -> None:
+    """Scan a source directory and produce a BundleManifest.
+
+    Examples:
+
+    \b
+        agent-sovereign bundle package --source ./agent --output ./dist \\
+            --sovereignty full --include-model
+        agent-sovereign bundle package -s ./agent -o ./dist --json-output
+    """
+    from agent_sovereign.bundler.manifest import BundleSovereigntyLevel
+    from agent_sovereign.bundler.packager import AgentPackager, PackageConfig
+
+    output.mkdir(parents=True, exist_ok=True)
+
+    config = PackageConfig(
+        output_dir=output,
+        include_model=include_model,
+        include_tests=include_tests,
+        compress=compress,
+    )
+    packager = AgentPackager(config)
+
+    try:
+        sovereignty_level = BundleSovereigntyLevel(sovereignty.lower())
+        manifest = packager.package(
+            source_dir=source,
+            sovereignty_level=sovereignty_level,
+            target_platform=target_platform,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Packaging error:[/red] {exc}")
+        sys.exit(1)
+
+    errors = packager.validate_bundle(manifest, output)
+    if errors:
+        console.print("[red]Bundle validation errors:[/red]")
+        for error in errors:
+            console.print(f"  [red]x[/red] {error}")
+        sys.exit(1)
+
+    manifest_path = output / "manifest.json"
+    manifest_path.write_text(manifest.to_json(), encoding="utf-8")
+
+    if json_output:
+        summary = {
+            "bundle_id": manifest.bundle_id,
+            "sovereignty_level": manifest.sovereignty_level.value,
+            "target_platform": manifest.target_platform,
+            "component_count": len(manifest.components),
+            "total_size_bytes": manifest.total_size_bytes,
+            "manifest_path": str(manifest_path),
+        }
+        console.print_json(json.dumps(summary, indent=2))
+        return
+
+    console.print(
+        Panel(
+            f"[bold green]{manifest.bundle_id}[/bold green]",
+            title="Bundle Manifest Created",
+            expand=False,
+        )
+    )
+    console.print(f"  Sovereignty   : {manifest.sovereignty_level.value.upper()}")
+    console.print(f"  Platform      : {manifest.target_platform}")
+    console.print(f"  Components    : {len(manifest.components)}")
+    console.print(f"  Total size    : {manifest.total_size_bytes:,} bytes")
+    console.print(f"  Manifest      : {manifest_path}")
+
+
+@bundle_group.command(name="docker")
+@click.option(
+    "--manifest",
+    "-m",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to manifest.json produced by 'bundle package'.",
+)
+@click.option(
+    "--base-image",
+    default="python:3.11-slim",
+    show_default=True,
+    help="Docker base image for the runtime stage.",
+)
+@click.option(
+    "--output",
+    "-o",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Directory to write Dockerfile, docker-compose.yml, .dockerignore.",
+)
+@click.option(
+    "--service-name",
+    default="agent",
+    show_default=True,
+    help="Compose service name.",
+)
+@click.option(
+    "--port",
+    "ports",
+    multiple=True,
+    type=int,
+    default=[8080],
+    show_default=True,
+    help="Port(s) to expose. Repeatable.",
+)
+@click.option(
+    "--healthcheck",
+    default=None,
+    help="Healthcheck command embedded in the Dockerfile.",
+)
+@click.option(
+    "--json-output",
+    is_flag=True,
+    default=False,
+    help="Emit JSON summary.",
+)
+def bundle_docker_command(
+    manifest: Path,
+    base_image: str,
+    output: Path,
+    service_name: str,
+    ports: tuple[int, ...],
+    healthcheck: str | None,
+    json_output: bool,
+) -> None:
+    """Generate Dockerfile, docker-compose.yml, and .dockerignore for a bundle.
+
+    Examples:
+
+    \b
+        agent-sovereign bundle docker --manifest dist/manifest.json \\
+            --output dist --port 8080 --healthcheck "curl -f http://localhost:8080/health"
+    """
+    from agent_sovereign.bundler.docker_generator import DockerConfig, DockerGenerator
+    from agent_sovereign.bundler.manifest import BundleManifest
+
+    try:
+        raw_manifest = manifest.read_text(encoding="utf-8")
+        bundle_manifest = BundleManifest.from_json(raw_manifest)
+    except Exception as exc:
+        console.print(f"[red]Failed to load manifest:[/red] {exc}")
+        sys.exit(1)
+
+    output.mkdir(parents=True, exist_ok=True)
+
+    config = DockerConfig(
+        base_image=base_image,
+        expose_ports=list(ports),
+        healthcheck_cmd=healthcheck,
+    )
+    generator = DockerGenerator(default_service_name=service_name)
+
+    dockerfile_content = generator.generate_dockerfile(bundle_manifest, config)
+    compose_content = generator.generate_compose(bundle_manifest, config, service_name)
+    dockerignore_content = generator.generate_dockerignore()
+
+    dockerfile_path = output / "Dockerfile"
+    compose_path = output / "docker-compose.yml"
+    dockerignore_path = output / ".dockerignore"
+
+    dockerfile_path.write_text(dockerfile_content, encoding="utf-8")
+    compose_path.write_text(compose_content, encoding="utf-8")
+    dockerignore_path.write_text(dockerignore_content, encoding="utf-8")
+
+    if json_output:
+        summary = {
+            "bundle_id": bundle_manifest.bundle_id,
+            "dockerfile": str(dockerfile_path),
+            "compose": str(compose_path),
+            "dockerignore": str(dockerignore_path),
+        }
+        console.print_json(json.dumps(summary, indent=2))
+        return
+
+    console.print(
+        Panel(
+            f"[bold green]Docker artefacts generated[/bold green]",
+            title=f"Bundle: {bundle_manifest.bundle_id}",
+            expand=False,
+        )
+    )
+    console.print(f"  Dockerfile        : {dockerfile_path}")
+    console.print(f"  docker-compose    : {compose_path}")
+    console.print(f"  .dockerignore     : {dockerignore_path}")
+
+
+@bundle_group.command(name="verify")
+@click.option(
+    "--manifest",
+    "-m",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to manifest.json.",
+)
+@click.option(
+    "--bundle-dir",
+    "-d",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    help="Directory containing the bundle files to verify.",
+)
+@click.option(
+    "--json-output",
+    is_flag=True,
+    default=False,
+    help="Emit JSON output.",
+)
+def bundle_verify_command(
+    manifest: Path,
+    bundle_dir: Path,
+    json_output: bool,
+) -> None:
+    """Verify component checksums in a bundle directory against the manifest.
+
+    Examples:
+
+    \b
+        agent-sovereign bundle verify --manifest dist/manifest.json \\
+            --bundle-dir dist/
+    """
+    from agent_sovereign.bundler.manifest import BundleManifest
+
+    try:
+        raw_manifest = manifest.read_text(encoding="utf-8")
+        bundle_manifest = BundleManifest.from_json(raw_manifest)
+    except Exception as exc:
+        console.print(f"[red]Failed to load manifest:[/red] {exc}")
+        sys.exit(1)
+
+    results = bundle_manifest.verify_checksums(bundle_dir)
+    all_valid = all(valid for _, valid in results)
+
+    if json_output:
+        summary = {
+            "bundle_id": bundle_manifest.bundle_id,
+            "all_valid": all_valid,
+            "results": [
+                {"component": name, "valid": valid} for name, valid in results
+            ],
+        }
+        console.print_json(json.dumps(summary, indent=2))
+        sys.exit(0 if all_valid else 1)
+
+    status_str = "[green]PASSED[/green]" if all_valid else "[red]FAILED[/red]"
+    console.print(
+        Panel(
+            f"Checksum verification: {status_str}",
+            title=f"Bundle Verify: {bundle_manifest.bundle_id}",
+            expand=False,
+        )
+    )
+
+    if results:
+        table = Table(show_header=True)
+        table.add_column("Component", style="cyan")
+        table.add_column("Status", min_width=8)
+        for name, valid in results:
+            status_cell = "[green]OK[/green]" if valid else "[red]FAIL[/red]"
+            table.add_row(name, status_cell)
+        console.print(table)
+
+    sys.exit(0 if all_valid else 1)
+
+
+@bundle_group.command(name="attest")
+@click.option(
+    "--manifest",
+    "-m",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to manifest.json.",
+)
+@click.option(
+    "--output",
+    "-o",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Path to write the attestations JSON file.",
+)
+@click.option(
+    "--issuer",
+    default="agent-sovereign/bundler",
+    show_default=True,
+    help="Attestation issuer label.",
+)
+@click.option(
+    "--json-output",
+    is_flag=True,
+    default=False,
+    help="Print the attestation summary as JSON.",
+)
+def bundle_attest_command(
+    manifest: Path,
+    output: Path,
+    issuer: str,
+    json_output: bool,
+) -> None:
+    """Generate build provenance and integrity attestations for a bundle.
+
+    Examples:
+
+    \b
+        agent-sovereign bundle attest --manifest dist/manifest.json \\
+            --output dist/attestations.json
+    """
+    from agent_sovereign.bundler.attestation import AttestationGenerator
+    from agent_sovereign.bundler.manifest import BundleManifest
+
+    try:
+        raw_manifest = manifest.read_text(encoding="utf-8")
+        bundle_manifest = BundleManifest.from_json(raw_manifest)
+    except Exception as exc:
+        console.print(f"[red]Failed to load manifest:[/red] {exc}")
+        sys.exit(1)
+
+    generator = AttestationGenerator(issuer=issuer)
+
+    bundle_dir = manifest.parent
+    provenance_att = generator.generate_build_provenance(bundle_manifest)
+    integrity_att = generator.generate_integrity_attestation(bundle_manifest, bundle_dir)
+
+    attestations = [provenance_att, integrity_att]
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    generator.export_attestations(attestations, output)
+
+    if json_output:
+        summary = {
+            "bundle_id": bundle_manifest.bundle_id,
+            "attestation_count": len(attestations),
+            "attestations": [
+                {
+                    "attestation_id": att.attestation_id,
+                    "attestation_type": att.attestation_type.value,
+                    "issued_at": att.issued_at.isoformat(),
+                    "issuer": att.issuer,
+                }
+                for att in attestations
+            ],
+            "output_path": str(output),
+        }
+        console.print_json(json.dumps(summary, indent=2))
+        return
+
+    console.print(
+        Panel(
+            f"[bold green]{len(attestations)} attestation(s) generated[/bold green]",
+            title=f"Bundle Attestation: {bundle_manifest.bundle_id}",
+            expand=False,
+        )
+    )
+    for att in attestations:
+        console.print(
+            f"  [{att.attestation_type.value}] "
+            f"id={att.attestation_id}  issued={att.issued_at.isoformat()}"
+        )
+    console.print(f"\n  Written to: {output}")
 
 
 if __name__ == "__main__":
