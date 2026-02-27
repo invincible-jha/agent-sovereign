@@ -19,7 +19,6 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -139,7 +138,7 @@ class BundleManifest(BaseModel):
     sovereignty_level: BundleSovereigntyLevel
     target_platform: str
     components: list[BundleComponent] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
 

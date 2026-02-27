@@ -18,10 +18,42 @@ Classes
 """
 from __future__ import annotations
 
+import re
 import textwrap
 from dataclasses import dataclass, field
 
 from agent_sovereign.bundler.manifest import BundleManifest, BundleSovereigntyLevel
+
+
+# ---------------------------------------------------------------------------
+# Path safety helpers
+# ---------------------------------------------------------------------------
+
+_SAFE_PATH_RE = re.compile(r'^[a-zA-Z0-9_./\-]+$')
+
+
+def _validate_path(path: str) -> str:
+    """Validate path is safe for Dockerfile COPY instruction.
+
+    Parameters
+    ----------
+    path:
+        The path string to validate.
+
+    Returns
+    -------
+    str
+        The validated path, unchanged.
+
+    Raises
+    ------
+    ValueError
+        If the path contains characters that are unsafe for embedding in
+        a Dockerfile COPY instruction.
+    """
+    if not _SAFE_PATH_RE.match(path):
+        raise ValueError(f"Unsafe path for Dockerfile: {path!r}")
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +233,7 @@ class DockerGenerator:
         lines.append("# Copy application files")
         if agent_code_paths:
             for code_path in agent_code_paths:
-                lines.append(f"COPY {code_path} ./")
+                lines.append(f"COPY {_validate_path(code_path)} ./")
         else:
             lines.append("COPY . ./")
         lines.append("")
@@ -209,9 +241,9 @@ class DockerGenerator:
         if config_paths or policy_paths:
             lines.append("# Copy configuration and policy files")
             for cfg_path in config_paths:
-                lines.append(f"COPY {cfg_path} ./")
+                lines.append(f"COPY {_validate_path(cfg_path)} ./")
             for pol_path in policy_paths:
-                lines.append(f"COPY {pol_path} ./")
+                lines.append(f"COPY {_validate_path(pol_path)} ./")
             lines.append("")
 
         # Set ownership

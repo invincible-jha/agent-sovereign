@@ -49,6 +49,8 @@ from __future__ import annotations
 
 __version__: str = "0.1.0"
 
+from agent_sovereign.convenience import Bundler, BundleResult
+
 # ---------------------------------------------------------------------------
 # Classifier
 # ---------------------------------------------------------------------------
@@ -137,6 +139,8 @@ from agent_sovereign.compliance.checker import (
 __all__ = [
     # Version
     "__version__",
+    "Bundler",
+    "BundleResult",
     # Classifier — levels
     "SovereigntyLevel",
     "LEVEL_DESCRIPTIONS",

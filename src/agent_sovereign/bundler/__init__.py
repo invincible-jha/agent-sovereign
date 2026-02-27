@@ -24,6 +24,15 @@ from agent_sovereign.bundler.manifest import (
     BundleManifest,
     BundleSovereigntyLevel,
 )
+from agent_sovereign.bundler.dependency_resolver import (
+    DependencyConflictError,
+    DependencyResolver,
+)
+from agent_sovereign.bundler.full_stack import (
+    AumOSComponent,
+    FullStackBundle,
+    FullStackBundler,
+)
 from agent_sovereign.bundler.packager import AgentPackager, PackageConfig
 
 __all__ = [
@@ -41,4 +50,11 @@ __all__ = [
     "Attestation",
     "AttestationGenerator",
     "AttestationType",
+    # Dependency resolver
+    "DependencyConflictError",
+    "DependencyResolver",
+    # Full-stack bundler
+    "AumOSComponent",
+    "FullStackBundle",
+    "FullStackBundler",
 ]

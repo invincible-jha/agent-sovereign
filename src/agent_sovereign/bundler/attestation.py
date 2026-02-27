@@ -27,7 +27,6 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 from agent_sovereign.bundler.manifest import BundleManifest
 
@@ -94,7 +93,7 @@ class Attestation:
     subject: str
     issuer: str
     issued_at: datetime.datetime
-    claims: dict[str, Any]
+    claims: dict[str, object]
     signature: str | None = None
 
 
@@ -138,7 +137,7 @@ class AttestationGenerator:
         """
         now = datetime.datetime.now(datetime.timezone.utc)
 
-        claims: dict[str, Any] = {
+        claims: dict[str, object] = {
             "bundle_id": manifest.bundle_id,
             "created_at": manifest.created_at.isoformat(),
             "sovereignty_level": manifest.sovereignty_level.value,
@@ -190,7 +189,7 @@ class AttestationGenerator:
         verification_results = manifest.verify_checksums(base_path)
         all_passed = all(valid for _, valid in verification_results)
 
-        claims: dict[str, Any] = {
+        claims: dict[str, object] = {
             "bundle_id": manifest.bundle_id,
             "verified_at": now.isoformat(),
             "base_path": str(base_path),
@@ -272,7 +271,7 @@ class AttestationGenerator:
         path:
             Destination file path.  Parent directories must exist.
         """
-        records: list[dict[str, Any]] = [
+        records: list[dict[str, object]] = [
             _attestation_to_dict(att) for att in attestations
         ]
         path.write_text(
@@ -312,7 +311,7 @@ class AttestationGenerator:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _sign_claims(claims: dict[str, Any]) -> str:
+    def _sign_claims(claims: dict[str, object]) -> str:
         """Compute a deterministic SHA-256 signature for a claims dict.
 
         Serialises the claims to canonical JSON (sorted keys, no extra
@@ -340,7 +339,7 @@ class AttestationGenerator:
 # ---------------------------------------------------------------------------
 
 
-def _attestation_to_dict(attestation: Attestation) -> dict[str, Any]:
+def _attestation_to_dict(attestation: Attestation) -> dict[str, object]:
     """Convert an Attestation dataclass to a JSON-serialisable dict."""
     return {
         "attestation_id": attestation.attestation_id,
@@ -353,7 +352,7 @@ def _attestation_to_dict(attestation: Attestation) -> dict[str, Any]:
     }
 
 
-def _attestation_from_dict(record: dict[str, Any]) -> Attestation:
+def _attestation_from_dict(record: dict[str, object]) -> Attestation:
     """Reconstruct an Attestation from a dict (e.g. loaded from JSON)."""
     issued_at_raw = record["issued_at"]
     if isinstance(issued_at_raw, str):
