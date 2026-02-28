@@ -318,17 +318,3 @@ export function createAgentSovereignClient(
   };
 }
 
-/** Re-export types for convenience. */
-export type {
-  DeploymentBundle,
-  EdgeRuntime,
-  OfflineCapability,
-  PackagerConfig,
-  PerformanceEstimate,
-  ResourceValidationResult,
-  SovereigntyLevel,
-  SovereigntyStatus,
-  SyncConfig,
-  SyncStateRequest,
-  SyncTask,
-};
