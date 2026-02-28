@@ -1,0 +1,10 @@
+name = "aumos-agent-worker"
+main = "src/worker.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+AUMOS_API_URL = "https://your-aumos-api.example.com"
+
+[[r2_buckets]]
+binding = "AGENT_STORAGE"
+bucket_name = "aumos-agents"

@@ -1,0 +1,36 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AumOS Agent Lambda with security scanning and evaluation
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: python3.12
+    MemorySize: 256
+
+Resources:
+  AumOSLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: aumos-agents
+      Description: AumOS agent security, evaluation, and governance packages
+      ContentUri: .
+      CompatibleRuntimes:
+        - python3.10
+        - python3.11
+        - python3.12
+    Metadata:
+      BuildMethod: python3.12
+
+  AgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      Layers:
+        - !Ref AumOSLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /agent
+            Method: post
