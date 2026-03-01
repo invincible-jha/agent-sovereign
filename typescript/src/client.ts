@@ -1,8 +1,12 @@
 /**
  * HTTP client for the agent-sovereign deployment management API.
  *
- * Uses the Fetch API (available natively in Node 18+, browsers, and Deno).
- * No external dependencies required.
+ * Delegates all HTTP transport to `@aumos/sdk-core` which provides
+ * automatic retry with exponential back-off, timeout management via
+ * `AbortSignal.timeout`, interceptor support, and a typed error hierarchy.
+ *
+ * The public-facing `ApiResult<T>` envelope is preserved for full
+ * backward compatibility with existing callers.
  *
  * @example
  * ```ts
@@ -18,8 +22,16 @@
  * ```
  */
 
+import {
+  createHttpClient,
+  HttpError,
+  NetworkError,
+  TimeoutError,
+  AumosError,
+  type HttpClient,
+} from "@aumos/sdk-core";
+
 import type {
-  ApiError,
   ApiResult,
   DeploymentBundle,
   EdgeRuntime,
@@ -49,55 +61,51 @@ export interface AgentSovereignClientConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Internal adapter
 // ---------------------------------------------------------------------------
 
-async function fetchJson<T>(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
+async function callApi<T>(
+  operation: () => Promise<{ readonly data: T; readonly status: number }>,
 ): Promise<ApiResult<T>> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
-    clearTimeout(timeoutId);
-
-    const body = await response.json() as unknown;
-
-    if (!response.ok) {
-      const errorBody = body as Partial<ApiError>;
+    const response = await operation();
+    return { ok: true, data: response.data };
+  } catch (error: unknown) {
+    if (error instanceof HttpError) {
       return {
         ok: false,
-        error: {
-          error: errorBody.error ?? "Unknown error",
-          detail: errorBody.detail ?? "",
-        },
-        status: response.status,
+        error: { error: error.message, detail: String(error.body ?? "") },
+        status: error.statusCode,
       };
     }
-
-    return { ok: true, data: body as T };
-  } catch (err: unknown) {
-    clearTimeout(timeoutId);
-    const message = err instanceof Error ? err.message : String(err);
+    if (error instanceof TimeoutError) {
+      return {
+        ok: false,
+        error: { error: "Request timed out", detail: error.message },
+        status: 0,
+      };
+    }
+    if (error instanceof NetworkError) {
+      return {
+        ok: false,
+        error: { error: "Network error", detail: error.message },
+        status: 0,
+      };
+    }
+    if (error instanceof AumosError) {
+      return {
+        ok: false,
+        error: { error: error.code, detail: error.message },
+        status: error.statusCode ?? 0,
+      };
+    }
+    const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      error: { error: "Network error", detail: message },
+      error: { error: "Unexpected error", detail: message },
       status: 0,
     };
   }
-}
-
-function buildHeaders(
-  extraHeaders: Readonly<Record<string, string>> | undefined,
-): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-    ...extraHeaders,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -202,119 +210,91 @@ export interface AgentSovereignClient {
 export function createAgentSovereignClient(
   config: AgentSovereignClientConfig,
 ): AgentSovereignClient {
-  const { baseUrl, timeoutMs = 30_000, headers: extraHeaders } = config;
-  const baseHeaders = buildHeaders(extraHeaders);
+  const http: HttpClient = createHttpClient({
+    baseUrl: config.baseUrl,
+    timeout: config.timeoutMs ?? 30_000,
+    defaultHeaders: config.headers,
+  });
 
   return {
-    async createBundle(
-      packagerConfig: PackagerConfig,
-    ): Promise<ApiResult<DeploymentBundle>> {
-      return fetchJson<DeploymentBundle>(
-        `${baseUrl}/sovereign/bundles`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(packagerConfig),
-        },
-        timeoutMs,
+    createBundle(packagerConfig: PackagerConfig): Promise<ApiResult<DeploymentBundle>> {
+      return callApi(() =>
+        http.post<DeploymentBundle>("/sovereign/bundles", packagerConfig),
       );
     },
 
-    async deployEdge(options: {
+    deployEdge(options: {
       bundle_checksum: string;
       edge_node_id: string;
       sovereignty_level: SovereigntyLevel;
       runtime_overrides?: Partial<EdgeRuntime>;
     }): Promise<ApiResult<EdgeRuntime>> {
-      return fetchJson<EdgeRuntime>(
-        `${baseUrl}/sovereign/edge/deploy`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(options),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.post<EdgeRuntime>("/sovereign/edge/deploy", options),
       );
     },
 
-    async getSovereigntyStatus(
-      edgeNodeId: string,
-    ): Promise<ApiResult<SovereigntyStatus>> {
-      return fetchJson<SovereigntyStatus>(
-        `${baseUrl}/sovereign/edge/${encodeURIComponent(edgeNodeId)}/status`,
-        { method: "GET", headers: baseHeaders },
-        timeoutMs,
+    getSovereigntyStatus(edgeNodeId: string): Promise<ApiResult<SovereigntyStatus>> {
+      return callApi(() =>
+        http.get<SovereigntyStatus>(
+          `/sovereign/edge/${encodeURIComponent(edgeNodeId)}/status`,
+        ),
       );
     },
 
-    async syncState(
+    syncState(
       edgeNodeId: string,
       request: SyncStateRequest,
     ): Promise<ApiResult<SyncTask>> {
-      return fetchJson<SyncTask>(
-        `${baseUrl}/sovereign/edge/${encodeURIComponent(edgeNodeId)}/sync`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(request),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.post<SyncTask>(
+          `/sovereign/edge/${encodeURIComponent(edgeNodeId)}/sync`,
+          request,
+        ),
       );
     },
 
-    async getOfflineCapabilities(
-      edgeNodeId: string,
-    ): Promise<ApiResult<OfflineCapability>> {
-      return fetchJson<OfflineCapability>(
-        `${baseUrl}/sovereign/edge/${encodeURIComponent(edgeNodeId)}/offline`,
-        { method: "GET", headers: baseHeaders },
-        timeoutMs,
+    getOfflineCapabilities(edgeNodeId: string): Promise<ApiResult<OfflineCapability>> {
+      return callApi(() =>
+        http.get<OfflineCapability>(
+          `/sovereign/edge/${encodeURIComponent(edgeNodeId)}/offline`,
+        ),
       );
     },
 
-    async validateResources(
+    validateResources(
       runtime: EdgeRuntime,
     ): Promise<ApiResult<ResourceValidationResult>> {
-      return fetchJson<ResourceValidationResult>(
-        `${baseUrl}/sovereign/edge/validate-resources`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(runtime),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.post<ResourceValidationResult>(
+          "/sovereign/edge/validate-resources",
+          runtime,
+        ),
       );
     },
 
-    async estimatePerformance(options: {
+    estimatePerformance(options: {
       runtime: EdgeRuntime;
       model_parameter_count_billions: number;
     }): Promise<ApiResult<PerformanceEstimate>> {
-      return fetchJson<PerformanceEstimate>(
-        `${baseUrl}/sovereign/edge/estimate-performance`,
-        {
-          method: "POST",
-          headers: baseHeaders,
-          body: JSON.stringify(options),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.post<PerformanceEstimate>(
+          "/sovereign/edge/estimate-performance",
+          options,
+        ),
       );
     },
 
-    async updateSyncPolicy(
+    updateSyncPolicy(
       edgeNodeId: string,
       policy: SyncConfig,
     ): Promise<ApiResult<SyncConfig>> {
-      return fetchJson<SyncConfig>(
-        `${baseUrl}/sovereign/edge/${encodeURIComponent(edgeNodeId)}/sync-policy`,
-        {
-          method: "PUT",
-          headers: baseHeaders,
-          body: JSON.stringify(policy),
-        },
-        timeoutMs,
+      return callApi(() =>
+        http.put<SyncConfig>(
+          `/sovereign/edge/${encodeURIComponent(edgeNodeId)}/sync-policy`,
+          policy,
+        ),
       );
     },
   };
 }
-

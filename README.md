@@ -21,6 +21,14 @@ Part of the [AumOS](https://github.com/aumos-ai) open-source agent infrastructur
 - Provenance attestation generates signed attestation records for every model inference, establishing a verifiable chain of custody from training data to deployed output
 - Deployment validator checks a packaged agent against residency policies, capability declarations, and hardware constraints before authorizing a deployment
 
+## Current Limitations
+
+> **Transparency note**: We list known limitations to help you evaluate fit.
+
+- **Benchmarks**: No published scalability or performance benchmarks.
+- **Platforms**: Docker, K8s, Lambda, edge — no native Windows deployment.
+- **Monitoring**: Basic health checks — no integrated observability.
+
 ## Quick Start
 
 Install from PyPI:
